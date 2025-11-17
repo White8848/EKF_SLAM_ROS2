@@ -7,6 +7,7 @@ Implements Extended Kalman Filter based SLAM using laser scan data
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseStamped, PoseArray, Pose
@@ -109,7 +110,16 @@ class EKFSLAMNode(Node):
         )
         
         # Publishers
-        self.map_pub = self.create_publisher(OccupancyGrid, '/map', 10)
+        self.map_pub = self.create_publisher(
+            OccupancyGrid, 
+            '/map', 
+            rclpy.qos.QoSProfile(
+                durability=rclpy.qos.DurabilityPolicy.TRANSIENT_LOCAL,
+                reliability=rclpy.qos.ReliabilityPolicy.RELIABLE,
+                history=rclpy.qos.HistoryPolicy.KEEP_LAST,
+                depth=1
+            )
+        )
         self.pose_pub = self.create_publisher(PoseStamped, '/ekf_pose', 10)
         self.landmarks_pub = self.create_publisher(PoseArray, '/landmarks', 10)
         

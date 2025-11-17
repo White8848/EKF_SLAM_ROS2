@@ -13,6 +13,8 @@ data_files = [
     (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
     # 安装 RViz 配置文件
     (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
+    # 安装 Nav2 配置文件
+    (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
 ]
 
 # ✅ 递归安装 worlds 目录下的所有文件（而不是目录本身）

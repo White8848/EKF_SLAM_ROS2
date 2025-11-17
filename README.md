@@ -20,6 +20,14 @@ ekf_slam/
 └── README.md
 ```
 
+## Demo
+
+<video src="https://github.com/White8848/EKF_SLAM_ROS2/raw/master/doc/EKF%20SLAM%20%2B%20Nav2.mp4" controls autoplay loop muted>
+  Your browser does not support the video tag.
+</video>
+
+*EKF SLAM mapping and Nav2 autonomous navigation demonstration in the bookstore environment*
+
 ## Prerequisites
 
 - ROS 2 (Humble/Jazzy)

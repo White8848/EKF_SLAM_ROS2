@@ -31,7 +31,7 @@ ekf_slam/
 
 ```bash
 cd ~/ekf_slam_ws/src
-git clone <repository-url> ekf_slam
+git clone https://github.com/White8848/EKF_SLAM_ROS2.git ekf_slam
 cd ~/ekf_slam_ws
 colcon build --packages-select ekf_slam
 source install/setup.bash
@@ -203,4 +203,16 @@ Use `--symlink-install` to avoid rebuilding after Python file changes.
 
 ## License
 
-TODO: Add license information
+Apache License 2.0
+
+## Maintainer
+
+- **Author**: White8848
+- **Repository**: [EKF_SLAM_ROS2](https://github.com/White8848/EKF_SLAM_ROS2)
+- **Email**: qinghuaharry1204@gmail.com
+
+## Acknowledgments
+
+- TurtleBot3 models and Gazebo worlds
+- ROS 2 community
+- AWS Robomaker retail models

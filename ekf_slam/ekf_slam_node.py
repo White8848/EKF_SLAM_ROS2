@@ -71,7 +71,7 @@ class EKFSLAMNode(Node):
         self.min_range = self.get_parameter('min_laser_range').value
         
         # Initialize state: [x, y, theta, landmark1_x, landmark1_y, ...]
-        self.state = np.array([0.0, 0.0, 0.0])  # Robot pose [x, y, theta]
+        self.state = np.array([0.0, 0.0, 0.0])  # Robot pose in map frame [x, y, theta]
         self.covariance = np.eye(3) * 0.1  # Initial uncertainty
         
         # Process and measurement noise
@@ -85,6 +85,13 @@ class EKFSLAMNode(Node):
         
         # Previous odometry for motion model
         self.prev_odom = None
+        
+        # Map frame is aligned with odom frame at startup (no drift correction yet)
+        # In a simple implementation without loop closure, map = odom
+        # So map->odom transform is identity (0, 0, 0)
+        self.map_to_odom_x = 0.0
+        self.map_to_odom_y = 0.0
+        self.map_to_odom_theta = 0.0
         
         # Subscribers
         self.scan_sub = self.create_subscription(
@@ -112,6 +119,9 @@ class EKFSLAMNode(Node):
         # Timer for publishing map
         self.create_timer(1.0, self.publish_map)
         
+        # Debug: log initial state
+        self.first_scan = True
+        
         self.get_logger().info('EKF SLAM Node initialized')
     
     def odom_callback(self, msg):
@@ -119,18 +129,9 @@ class EKFSLAMNode(Node):
         current_odom = msg
         
         if self.prev_odom is not None:
-            # Extract position and orientation
-            dx = current_odom.pose.pose.position.x - self.prev_odom.pose.pose.position.x
-            dy = current_odom.pose.pose.position.y - self.prev_odom.pose.pose.position.y
-            
-            # Get yaw from quaternion
-            _, _, prev_yaw = euler_from_quaternion(
-                self.prev_odom.pose.pose.orientation.x,
-                self.prev_odom.pose.pose.orientation.y,
-                self.prev_odom.pose.pose.orientation.z,
-                self.prev_odom.pose.pose.orientation.w
-            )
-            
+            # Get current odometry pose in odom frame
+            curr_x = current_odom.pose.pose.position.x
+            curr_y = current_odom.pose.pose.position.y
             _, _, curr_yaw = euler_from_quaternion(
                 current_odom.pose.pose.orientation.x,
                 current_odom.pose.pose.orientation.y,
@@ -138,24 +139,77 @@ class EKFSLAMNode(Node):
                 current_odom.pose.pose.orientation.w
             )
             
+            # Get previous odometry pose in odom frame
+            prev_x = self.prev_odom.pose.pose.position.x
+            prev_y = self.prev_odom.pose.pose.position.y
+            _, _, prev_yaw = euler_from_quaternion(
+                self.prev_odom.pose.pose.orientation.x,
+                self.prev_odom.pose.pose.orientation.y,
+                self.prev_odom.pose.pose.orientation.z,
+                self.prev_odom.pose.pose.orientation.w
+            )
+            
+            # Calculate odometry delta in GLOBAL odom frame
+            # These are global displacements, not in robot's local frame
+            dx_global = curr_x - prev_x
+            dy_global = curr_y - prev_y
             dtheta = curr_yaw - prev_yaw
             
             # Normalize angle
             dtheta = np.arctan2(np.sin(dtheta), np.cos(dtheta))
             
-            # Prediction step
-            self.predict(dx, dy, dtheta)
+            # For simple SLAM where map = odom initially:
+            # We directly use odom position as our state
+            # No coordinate transformation needed!
+            self.state[0] = curr_x
+            self.state[1] = curr_y
+            self.state[2] = curr_yaw
+            
+            # Update covariance (simplified - just add process noise)
+            self.covariance[:3, :3] += self.Q
+            
+            # Publish estimated pose
+            self.publish_pose()
+        else:
+            # First odometry message: initialize robot state to current odom position
+            curr_x = current_odom.pose.pose.position.x
+            curr_y = current_odom.pose.pose.position.y
+            _, _, curr_yaw = euler_from_quaternion(
+                current_odom.pose.pose.orientation.x,
+                current_odom.pose.pose.orientation.y,
+                current_odom.pose.pose.orientation.z,
+                current_odom.pose.pose.orientation.w
+            )
+            self.state[0] = curr_x
+            self.state[1] = curr_y
+            self.state[2] = curr_yaw
         
         self.prev_odom = current_odom
     
-    def predict(self, dx, dy, dtheta):
+    def predict(self, dx_odom, dy_odom, dtheta):
         """EKF prediction step based on odometry"""
-        # Current state
+        # Current state in map frame
         x, y, theta = self.state[0], self.state[1], self.state[2]
         
-        # Motion model: update robot pose
-        self.state[0] += dx * np.cos(theta) - dy * np.sin(theta)
-        self.state[1] += dx * np.sin(theta) + dy * np.cos(theta)
+        # For simple SLAM without loop closure: map frame = odom frame
+        # Odometry gives us delta in odom frame (relative to previous robot pose)
+        # We need to transform this delta to the current map frame orientation
+        # 
+        # The odometry delta (dx_odom, dy_odom) is in the robot's LOCAL frame at previous timestep
+        # We need to rotate it to the global map frame using PREVIOUS robot orientation
+        # NOT current orientation!
+        
+        # Use PREVIOUS theta (before update) for rotation
+        cos_theta = np.cos(theta)
+        sin_theta = np.sin(theta)
+        
+        # Transform delta from robot frame to map frame
+        dx_map = dx_odom * cos_theta - dy_odom * sin_theta
+        dy_map = dx_odom * sin_theta + dy_odom * cos_theta
+        
+        # Motion model: update robot pose in map frame
+        self.state[0] += dx_map
+        self.state[1] += dy_map
         self.state[2] += dtheta
         
         # Normalize theta
@@ -164,8 +218,8 @@ class EKFSLAMNode(Node):
         # Jacobian of motion model
         n = len(self.state)
         G = np.eye(n)
-        G[0, 2] = -dx * np.sin(theta) - dy * np.cos(theta)
-        G[1, 2] = dx * np.cos(theta) - dy * np.sin(theta)
+        G[0, 2] = -dx_odom * sin_theta - dy_odom * cos_theta
+        G[1, 2] = dx_odom * cos_theta - dy_odom * sin_theta
         
         # Update covariance
         self.covariance = G @ self.covariance @ G.T
@@ -183,6 +237,29 @@ class EKFSLAMNode(Node):
         robot_y = self.state[1]
         robot_theta = self.state[2]
         
+        # Debug: log on first scan
+        if self.first_scan:
+            self.get_logger().info(f'First scan - Robot pose: x={robot_x:.3f}, y={robot_y:.3f}, theta={robot_theta:.3f} rad ({np.degrees(robot_theta):.1f} deg)')
+            self.get_logger().info(f'Scan angle range: {msg.angle_min:.3f} to {msg.angle_max:.3f} rad')
+            
+            # Find the closest obstacle in front (angle ≈ 0)
+            front_idx = 0
+            if msg.ranges[front_idx] < self.max_range:
+                self.get_logger().info(f'Front obstacle distance: {msg.ranges[front_idx]:.3f}m at angle 0 rad')
+            
+            # Find closest obstacle to the left (angle ≈ π/2)
+            left_idx = int(len(msg.ranges) * 0.25)
+            if left_idx < len(msg.ranges) and msg.ranges[left_idx] < self.max_range:
+                angle_left = msg.angle_min + left_idx * msg.angle_increment
+                self.get_logger().info(f'Left obstacle distance: {msg.ranges[left_idx]:.3f}m at angle {angle_left:.3f} rad ({np.degrees(angle_left):.1f} deg)')
+            
+            self.first_scan = False
+        
+        # Laser scan is in base_scan frame which follows ROS REP-105
+        # X-axis points forward, Y-axis points left, Z-axis points up
+        # angle_min = 0 typically points in the +X direction (forward)
+        # Angles increase counter-clockwise (towards +Y / left side)
+        
         angle = msg.angle_min
         for i, r in enumerate(msg.ranges):
             # Filter invalid ranges
@@ -190,9 +267,21 @@ class EKFSLAMNode(Node):
                 angle += msg.angle_increment
                 continue
             
-            # Convert to global coordinates
-            global_x = robot_x + r * np.cos(robot_theta + angle)
-            global_y = robot_y + r * np.sin(robot_theta + angle)
+            # Point in base_scan frame (laser frame)
+            # ROS uses right-hand rule: X forward, Y left, Z up
+            # angle=0 is forward (+X), angle=π/2 is left (+Y)
+            scan_x = r * np.cos(angle)
+            scan_y = r * np.sin(angle)
+            
+            # Transform to map frame using 2D rotation matrix
+            # map frame also follows ROS convention: X forward (east), Y left (north)
+            cos_theta = np.cos(robot_theta)
+            sin_theta = np.sin(robot_theta)
+            
+            # 2D rotation: [x'] = [cos -sin] [x]
+            #              [y']   [sin  cos] [y]
+            global_x = robot_x + (scan_x * cos_theta - scan_y * sin_theta)
+            global_y = robot_y + (scan_x * sin_theta + scan_y * cos_theta)
             
             # Update occupancy grid
             self.update_map(global_x, global_y, occupied=True)
@@ -289,18 +378,23 @@ class EKFSLAMNode(Node):
         self.pose_pub.publish(pose_msg)
         
         # Publish TF: map -> odom
+        # For simple SLAM without loop closure detection, map and odom are aligned
+        # So the transform is identity (no rotation, no translation)
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = 'map'
         t.child_frame_id = 'odom'
         
-        t.transform.translation.x = self.state[0]
-        t.transform.translation.y = self.state[1]
+        # Identity transform (map = odom)
+        t.transform.translation.x = self.map_to_odom_x
+        t.transform.translation.y = self.map_to_odom_y
         t.transform.translation.z = 0.0
-        t.transform.rotation.x = quat[0]
-        t.transform.rotation.y = quat[1]
-        t.transform.rotation.z = quat[2]
-        t.transform.rotation.w = quat[3]
+        
+        quat_tf = quaternion_from_euler(0, 0, self.map_to_odom_theta)
+        t.transform.rotation.x = quat_tf[0]
+        t.transform.rotation.y = quat_tf[1]
+        t.transform.rotation.z = quat_tf[2]
+        t.transform.rotation.w = quat_tf[3]
         
         self.tf_broadcaster.sendTransform(t)
 

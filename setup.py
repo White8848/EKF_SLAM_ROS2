@@ -47,6 +47,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ekf_slam_node = ekf_slam.ekf_slam_node:main',
+            'ekf_slam_clustering_node = ekf_slam.ekf_slam_clustering_node:main',
         ],
     },
 )

@@ -27,7 +27,7 @@ import math
 
 # EKF Noise Parameters
 PROCESS_NOISE = [0.01, 0.01, 0.01]      # Q matrix diagonal: [x, y, θ]
-MEASUREMENT_NOISE = [0.1, 0.1]          # R matrix diagonal: [range, bearing]
+MEASUREMENT_NOISE = [0.3, 0.3]          # R matrix diagonal: [range, bearing]
 
 # Data Association
 ASSOCIATION_THRESHOLD = 5.99             # Mahalanobis distance threshold
@@ -39,13 +39,19 @@ MAX_THETA_DELTA = 0.05                  # Max angle change per update (rad)
 # Clustering Parameters (DBSCAN-like)
 CLUSTER_EPS = 0.3                       # Max distance between points in cluster (m)
 CLUSTER_MIN_POINTS = 3                  # Min points to form a cluster
-MAX_CLUSTER_SIZE = 1.0                  # Max cluster diameter (m) - reject large clusters
+MAX_CLUSTER_SIZE = 1.5                  # Max cluster diameter (m) - reject large clusters
+
+# Circle Fitting Parameters
+MIN_CIRCLE_RADIUS = 0.1                 # Minimum cylinder radius (m)
+MAX_CIRCLE_RADIUS = 0.6                 # Maximum cylinder radius (m)
+CIRCLE_FIT_ERROR_THRESHOLD = 0.1        # Max fitting error to accept (m)
 
 # Landmark Management
 MAX_LANDMARKS = 30                      # Maximum number of landmarks
-MIN_LANDMARK_SEPARATION = 0.5           # Minimum distance between landmarks (m)
+MIN_LANDMARK_SEPARATION = 0.6           # Minimum distance between landmarks (m)
 LANDMARK_CONFIRM_FRAMES = 3             # Frames to confirm new landmark
-LANDMARK_CONFIRM_DISTANCE = 0.3         # Distance threshold for confirmation
+LANDMARK_CONFIRM_DISTANCE = 0.4         # Distance threshold for confirmation
+MAX_LANDMARK_RANGE = 3.0                # Max range for landmark detection (< laser range)
 
 # Map Generation
 USE_EKF_POSE_FOR_MAP = True
@@ -256,8 +262,8 @@ class EKFSLAMClusteringNode(Node):
     
     def extract_landmarks_clustering(self, msg):
         """
-        Extract landmarks using clustering algorithm.
-        Returns list of (range, bearing) for cluster centroids.
+        Extract landmarks using clustering + circle fitting.
+        Returns list of (range, bearing) for circle centers.
         """
         # Convert scan to cartesian points
         points = []
@@ -272,35 +278,97 @@ class EKFSLAMClusteringNode(Node):
         if len(points) < CLUSTER_MIN_POINTS:
             return []
         
-        # Simple DBSCAN-like clustering
+        # DBSCAN-like clustering
         clusters = self.dbscan_cluster(points)
         
-        # Convert clusters to polar coordinates (centroid)
+        # Convert clusters to polar coordinates using circle fitting
         landmarks = []
         for cluster in clusters:
             if len(cluster) < CLUSTER_MIN_POINTS:
                 continue
             
-            # Check cluster size (diameter)
-            xs = [p[0] for p in cluster]
-            ys = [p[1] for p in cluster]
-            diameter = max(max(xs) - min(xs), max(ys) - min(ys))
+            # Extract x, y coordinates
+            xs = np.array([p[0] for p in cluster])
+            ys = np.array([p[1] for p in cluster])
             
+            # Check cluster extent
+            diameter = max(np.max(xs) - np.min(xs), np.max(ys) - np.min(ys))
             if diameter > MAX_CLUSTER_SIZE:
-                continue  # Skip large clusters (walls, etc.)
+                continue  # Skip large clusters (walls)
             
-            # Compute centroid
+            # Try circle fitting
+            result = self.fit_circle(xs, ys)
+            
+            if result is not None:
+                cx, cy, radius, error = result
+                
+                # Validate circle fit
+                if (MIN_CIRCLE_RADIUS <= radius <= MAX_CIRCLE_RADIUS and
+                    error < CIRCLE_FIT_ERROR_THRESHOLD):
+                    # Use circle center as landmark
+                    lm_range = np.sqrt(cx**2 + cy**2)
+                    lm_bearing = np.arctan2(cy, cx)
+                    
+                    # Only accept if within landmark range (prevents misidentifying distant walls)
+                    if self.min_range < lm_range < MAX_LANDMARK_RANGE:
+                        landmarks.append((lm_range, lm_bearing))
+                        continue
+            
+            # Fallback to centroid if circle fitting fails
             cx = np.mean(xs)
             cy = np.mean(ys)
-            
-            # Convert to polar
             lm_range = np.sqrt(cx**2 + cy**2)
             lm_bearing = np.arctan2(cy, cx)
             
-            if lm_range > self.min_range and lm_range < self.max_range:
+            # Only accept if within landmark range
+            if self.min_range < lm_range < MAX_LANDMARK_RANGE:
                 landmarks.append((lm_range, lm_bearing))
         
         return landmarks
+    
+    def fit_circle(self, xs, ys):
+        """
+        Fit a circle to points using algebraic least squares.
+        
+        Uses the method: minimize sum of (x^2 + y^2 - 2*cx*x - 2*cy*y + (cx^2 + cy^2 - r^2))^2
+        Which simplifies to solving a linear system.
+        
+        Returns: (cx, cy, radius, mean_error) or None if fitting fails
+        """
+        n = len(xs)
+        if n < 3:
+            return None
+        
+        # Build design matrix for algebraic circle fit
+        # Model: x^2 + y^2 + D*x + E*y + F = 0
+        # Where: cx = -D/2, cy = -E/2, r = sqrt(cx^2 + cy^2 - F)
+        
+        A = np.column_stack([xs, ys, np.ones(n)])
+        b = -(xs**2 + ys**2)
+        
+        try:
+            # Solve least squares: A @ [D, E, F]^T = b
+            result, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
+            D, E, F = result
+        except np.linalg.LinAlgError:
+            return None
+        
+        # Extract circle parameters
+        cx = -D / 2.0
+        cy = -E / 2.0
+        r_squared = cx**2 + cy**2 - F
+        
+        if r_squared <= 0:
+            return None
+        
+        radius = np.sqrt(r_squared)
+        
+        # Compute fitting error (mean distance from points to circle)
+        distances = np.sqrt((xs - cx)**2 + (ys - cy)**2)
+        errors = np.abs(distances - radius)
+        mean_error = np.mean(errors)
+        
+        return (cx, cy, radius, mean_error)
     
     def dbscan_cluster(self, points):
         """
@@ -609,7 +677,7 @@ class EKFSLAMClusteringNode(Node):
             if x == gx1 and y == gy1:
                 break
             if 0 <= x < self.map_width and 0 <= y < self.map_height:
-                self.map_data[y, x] = max(0, self.map_data[y, x] - 2)
+                self.map_data[y, x] = max(-1, self.map_data[y, x] - 2)
             
             e2 = 2 * err
             if e2 > -dy:

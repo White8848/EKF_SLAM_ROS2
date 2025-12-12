@@ -33,14 +33,14 @@ import math
 
 # EKF Noise Parameters
 PROCESS_NOISE = [0.01, 0.01, 0.01]      # Q matrix diagonal: [x, y, θ] motion uncertainty
-MEASUREMENT_NOISE = [0.3, 0.3]          # R matrix diagonal: [range, bearing] sensor uncertainty
+MEASUREMENT_NOISE = [0.1, 0.1]          # R matrix diagonal: [range, bearing] sensor uncertainty
 
 # Data Association
-ASSOCIATION_THRESHOLD = 2.0             # Mahalanobis distance threshold (χ² 2-DOF 95% ≈ 5.99)
+ASSOCIATION_THRESHOLD = 1.0             # Mahalanobis distance threshold (χ² 2-DOF 95% ≈ 5.99)
 
 # EKF Update Limits (prevents large jumps)
-MAX_POS_DELTA = 0.1                      # Max position change per update (meters)
-MAX_THETA_DELTA = 0.1                    # Max angle change per update (radians, ~5.7°)
+MAX_POS_DELTA = 0.01                      # Max position change per update (meters)
+MAX_THETA_DELTA = 0.01                    # Max angle change per update (radians, ~5.7°)
 
 # Corner Detection (Split-and-Merge)
 SPLIT_THRESHOLD = 0.05                    # Max distance from point to fitted line (m)
@@ -53,11 +53,15 @@ CORNER_ANGLE_MAX = 100.0                  # Max line angle for corner detection 
 
 # Landmark Management
 MAX_LANDMARKS = 20                       # Maximum number of landmarks to track
+MIN_LANDMARK_SEPARATION = 0.3            # Minimum distance (m) between landmarks
 
 # Corner Stability Verification
-CORNER_CONFIRM_FRAMES = 3                # Number of frames a corner must be seen to confirm
+CORNER_CONFIRM_FRAMES = 5                # Number of frames a corner must be seen to confirm
 CORNER_CONFIRM_DISTANCE = 0.2            # Max distance (m) to consider same corner across frames
 CORNER_CANDIDATE_TIMEOUT = 10            # Frames before a candidate corner is forgotten
+
+# Map Generation
+USE_EKF_POSE_FOR_MAP = True              # True: use EKF pose, False: use odom pose (more stable)
 
 # =============================================================================
 # =============================================================================
@@ -301,13 +305,25 @@ class EKFSLAMNode(Node):
         if not self.initialized or self.prev_odom is None:
             return
         
-        # Use EKF estimated pose for grid map
-        robot_x, robot_y, robot_theta = self.state[0], self.state[1], self.state[2]
+        # Get pose for map generation based on switch
+        if USE_EKF_POSE_FOR_MAP:
+            # Use EKF estimated pose
+            map_x, map_y, map_theta = self.state[0], self.state[1], self.state[2]
+        else:
+            # Use odometry pose (more stable, no EKF corrections)
+            map_x = self.prev_odom.pose.pose.position.x
+            map_y = self.prev_odom.pose.pose.position.y
+            _, _, map_theta = euler_from_quaternion(
+                self.prev_odom.pose.pose.orientation.x,
+                self.prev_odom.pose.pose.orientation.y,
+                self.prev_odom.pose.pose.orientation.z,
+                self.prev_odom.pose.pose.orientation.w
+            )
         
         # ---------------------------------------------------------------------
-        # 1. Update occupancy grid using EKF pose
+        # 1. Update occupancy grid
         # ---------------------------------------------------------------------
-        self.update_occupancy_grid(msg, robot_x, robot_y, robot_theta)
+        self.update_occupancy_grid(msg, map_x, map_y, map_theta)
         
         # ---------------------------------------------------------------------
         # 2. Extract corner landmarks from scan
@@ -399,13 +415,25 @@ class EKFSLAMNode(Node):
                     
                     # Check if candidate is confirmed
                     if candidate['count'] >= CORNER_CONFIRM_FRAMES:
-                        # Add as landmark
-                        lm_dx = candidate['x'] - robot_x
-                        lm_dy = candidate['y'] - robot_y
-                        lm_range = np.sqrt(lm_dx**2 + lm_dy**2)
-                        lm_bearing = normalize_angle(np.arctan2(lm_dy, lm_dx) - robot_theta)
-                        self.add_landmark(lm_range, lm_bearing)
-                        # Remove from candidates
+                        # Check if too close to existing landmarks
+                        too_close = False
+                        for i in range(self.num_landmarks):
+                            lx = self.state[3 + 2 * i]
+                            ly = self.state[3 + 2 * i + 1]
+                            dist_to_lm = np.sqrt((candidate['x'] - lx)**2 + (candidate['y'] - ly)**2)
+                            if dist_to_lm < MIN_LANDMARK_SEPARATION:
+                                too_close = True
+                                break
+                        
+                        if not too_close:
+                            # Add as landmark
+                            lm_dx = candidate['x'] - robot_x
+                            lm_dy = candidate['y'] - robot_y
+                            lm_range = np.sqrt(lm_dx**2 + lm_dy**2)
+                            lm_bearing = normalize_angle(np.arctan2(lm_dy, lm_dx) - robot_theta)
+                            self.add_landmark(lm_range, lm_bearing)
+                        
+                        # Remove from candidates (whether added or rejected)
                         self.corner_candidates.remove(candidate)
                     break
             
@@ -1103,6 +1131,7 @@ class EKFSLAMNode(Node):
         # Covariance of new landmark
         P_robot = self.covariance[:3, :3]
         P_lm = Gp @ P_robot @ Gp.T + Gz @ self.R @ Gz.T
+        
         P_new[n_old:, n_old:] = P_lm
         
         # Cross-covariance between new landmark and existing state

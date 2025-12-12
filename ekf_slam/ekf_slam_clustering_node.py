@@ -722,7 +722,7 @@ class EKFSLAMClusteringNode(Node):
         )
         
         pose_msg = PoseStamped()
-        pose_msg.header.stamp = self.get_clock().now().to_msg()
+        pose_msg.header.stamp = self.prev_odom.header.stamp  # Use odom timestamp for sim time
         pose_msg.header.frame_id = 'map'
         pose_msg.pose.position.x = ekf_x
         pose_msg.pose.position.y = ekf_y
@@ -743,7 +743,7 @@ class EKFSLAMClusteringNode(Node):
         ty = ekf_y - (sin_diff * odom_x + cos_diff * odom_y)
         
         t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.stamp = self.prev_odom.header.stamp  # Use odom timestamp for sim time
         t.header.frame_id = 'map'
         t.child_frame_id = 'odom'
         t.transform.translation.x = tx

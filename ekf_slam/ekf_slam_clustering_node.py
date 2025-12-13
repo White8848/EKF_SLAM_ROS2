@@ -26,15 +26,17 @@ import math
 # =============================================================================
 
 # EKF Noise Parameters
-PROCESS_NOISE = [0.01, 0.01, 0.01]      # Q matrix diagonal: [x, y, θ]
-MEASUREMENT_NOISE = [0.3, 0.3]          # R matrix diagonal: [range, bearing]
+PROCESS_NOISE = [0.001, 0.001, 0.001]   # Q matrix diagonal: [x, y, θ] - low for stable prediction
+MEASUREMENT_NOISE = [0.2, 0.2]          # R matrix diagonal: [range, bearing] - higher = more conservative
 
 # Data Association
-ASSOCIATION_THRESHOLD = 5.99             # Mahalanobis distance threshold
+ASSOCIATION_THRESHOLD = 5.99            # Mahalanobis distance threshold (95% confidence)
 
 # EKF Update Limits
-MAX_POS_DELTA = 0.05                    # Max position change per update (m)
-MAX_THETA_DELTA = 0.05                  # Max angle change per update (rad)
+MAX_POS_DELTA = 0.02                    # Max position change per update (m) - conservative
+MAX_THETA_DELTA = 0.02                  # Max angle change per update (rad) - conservative
+MAX_INNOVATION_RANGE = 0.5              # Max acceptable range innovation (m)
+MAX_INNOVATION_BEARING = 0.3            # Max acceptable bearing innovation (rad)
 
 # Clustering Parameters (DBSCAN-like)
 CLUSTER_EPS = 0.3                       # Max distance between points in cluster (m)
@@ -44,13 +46,13 @@ MAX_CLUSTER_SIZE = 1.5                  # Max cluster diameter (m) - reject larg
 # Circle Fitting Parameters
 MIN_CIRCLE_RADIUS = 0.1                 # Minimum cylinder radius (m)
 MAX_CIRCLE_RADIUS = 0.6                 # Maximum cylinder radius (m)
-CIRCLE_FIT_ERROR_THRESHOLD = 0.1        # Max fitting error to accept (m)
+CIRCLE_FIT_ERROR_THRESHOLD = 0.15       # Max fitting error to accept (m)
 
 # Landmark Management
 MAX_LANDMARKS = 30                      # Maximum number of landmarks
-MIN_LANDMARK_SEPARATION = 0.6           # Minimum distance between landmarks (m)
-LANDMARK_CONFIRM_FRAMES = 3             # Frames to confirm new landmark
-LANDMARK_CONFIRM_DISTANCE = 0.4         # Distance threshold for confirmation
+MIN_LANDMARK_SEPARATION = 0.8           # Minimum distance between landmarks (m)
+LANDMARK_CONFIRM_FRAMES = 2             # Frames to confirm new landmark (reduced from 3)
+LANDMARK_CONFIRM_DISTANCE = 0.5         # Distance threshold for confirmation
 MAX_LANDMARK_RANGE = 3.0                # Max range for landmark detection (< laser range)
 
 # Map Generation
@@ -419,40 +421,30 @@ class EKFSLAMClusteringNode(Node):
     
     def process_landmarks(self, landmarks_polar):
         """Process detected landmarks: associate or add new ones."""
-        best_match = None
-        best_mahal = float('inf')
         new_landmarks = []
         
         for z_range, z_bearing in landmarks_polar:
             landmark_idx = self.associate_landmark(z_range, z_bearing)
             
             if landmark_idx >= 0:
-                # Compute innovation
+                # Matched with existing landmark - check innovation before update
                 robot_x, robot_y, robot_theta = self.state[0], self.state[1], self.state[2]
                 lx = self.state[3 + 2 * landmark_idx]
                 ly = self.state[3 + 2 * landmark_idx + 1]
-                dx = lx - robot_x
-                dy = ly - robot_y
+                dx, dy = lx - robot_x, ly - robot_y
                 pred_range = np.sqrt(dx**2 + dy**2)
                 pred_bearing = normalize_angle(np.arctan2(dy, dx) - robot_theta)
                 
-                innovation_range = abs(z_range - pred_range)
-                innovation_bearing = abs(normalize_angle(z_bearing - pred_bearing))
+                innov_range = abs(z_range - pred_range)
+                innov_bearing = abs(normalize_angle(z_bearing - pred_bearing))
                 
-                # Innovation gating
-                if innovation_range < 0.5 and innovation_bearing < 0.3:
-                    innovation_mag = np.sqrt(innovation_range**2 + innovation_bearing**2)
-                    if innovation_mag < best_mahal:
-                        best_mahal = innovation_mag
-                        best_match = (landmark_idx, z_range, z_bearing)
-                else:
-                    new_landmarks.append((z_range, z_bearing))
+                # Only update if innovation is reasonable (prevents drift from bad matches)
+                if innov_range < MAX_INNOVATION_RANGE and innov_bearing < MAX_INNOVATION_BEARING:
+                    self.ekf_update(landmark_idx, z_range, z_bearing)
+                # else: skip update but don't add as new landmark
             else:
+                # No match found - potential new landmark
                 new_landmarks.append((z_range, z_bearing))
-        
-        # Update with best match
-        if best_match is not None:
-            self.ekf_update(best_match[0], best_match[1], best_match[2])
         
         # Process new landmarks with stability check
         if new_landmarks and self.num_landmarks < MAX_LANDMARKS:
@@ -510,6 +502,14 @@ class EKFSLAMClusteringNode(Node):
             z_range - pred_range,
             normalize_angle(z_bearing - pred_bearing)
         ])
+        
+        # Debug: log innovation for diagnostics
+        self.get_logger().debug(
+            f'EKF Update LM#{landmark_idx+1}: '
+            f'innov_r={innovation[0]:.3f}m, innov_b={np.degrees(innovation[1]):.1f}°, '
+            f'obs=({z_range:.2f}m, {np.degrees(z_bearing):.1f}°), '
+            f'pred=({pred_range:.2f}m, {np.degrees(pred_bearing):.1f}°)'
+        )
         
         H = self._compute_jacobian_H(landmark_idx, dx, dy, pred_range)
         S = H @ self.covariance @ H.T + self.R

@@ -120,9 +120,11 @@ Run all commands in separate terminals:
 ```bash
 # Terminal 1: Simulation
 ros2 launch ekf_slam robot_bookstore.launch.py
+ros2 launch ekf_slam robot_cylinder.launch.py
 
 # Terminal 2: EKF SLAM
 ros2 launch ekf_slam ekf_slam.launch.py
+ros2 launch ekf_slam ekf_slam_clustering.launch.py
 
 # Terminal 3: Visualization
 ros2 launch ekf_slam view_robot.launch.py

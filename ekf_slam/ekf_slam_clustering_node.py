@@ -41,7 +41,7 @@ MAX_INNOVATION_BEARING = 0.3            # Max acceptable bearing innovation (rad
 
 # Clustering Parameters (DBSCAN-like)
 CLUSTER_EPS = 0.3                       # Max distance between points in cluster (m)
-CLUSTER_MIN_POINTS = 3                  # Min points to form a cluster
+CLUSTER_MIN_POINTS = 2                  # Min points to form a cluster
 MAX_CLUSTER_SIZE = 1.5                  # Max cluster diameter (m) - reject large clusters
 
 # Circle Fitting Parameters
@@ -50,7 +50,7 @@ MAX_CIRCLE_RADIUS = 0.6                 # Maximum cylinder radius (m)
 CIRCLE_FIT_ERROR_THRESHOLD = 0.15       # Max fitting error to accept (m)
 
 # Landmark Management
-MAX_LANDMARKS = 30                      # Maximum number of landmarks
+MAX_LANDMARKS = 20                    # Maximum number of landmarks
 MIN_LANDMARK_SEPARATION = 0.8           # Minimum distance between landmarks (m)
 LANDMARK_CONFIRM_FRAMES = 2             # Frames to confirm new landmark (reduced from 3)
 LANDMARK_CONFIRM_DISTANCE = 0.5         # Distance threshold for confirmation

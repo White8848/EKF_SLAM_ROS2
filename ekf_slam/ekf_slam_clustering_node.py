@@ -27,7 +27,7 @@ import math
 
 # EKF Noise Parameters
 PROCESS_NOISE = [0.001, 0.001, 0.001]   # Q matrix diagonal: [x, y, θ] - low for stable prediction
-MEASUREMENT_NOISE = [0.2, 0.2]          # R matrix diagonal: [range, bearing] - higher = more conservative
+MEASUREMENT_NOISE = [0.1, 0.1]          # R matrix diagonal: [range, bearing] - higher = more conservative
 
 # Data Association
 ASSOCIATION_THRESHOLD = 5.99            # Mahalanobis distance threshold (95% confidence)
@@ -45,16 +45,16 @@ CLUSTER_MIN_POINTS = 2                  # Min points to form a cluster
 MAX_CLUSTER_SIZE = 1.5                  # Max cluster diameter (m) - reject large clusters
 
 # Circle Fitting Parameters
-MIN_CIRCLE_RADIUS = 0.1                 # Minimum cylinder radius (m)
-MAX_CIRCLE_RADIUS = 0.6                 # Maximum cylinder radius (m)
-CIRCLE_FIT_ERROR_THRESHOLD = 0.15       # Max fitting error to accept (m)
+MIN_CIRCLE_RADIUS = 0.05                # Minimum cylinder radius (m) - reduced for smaller cylinders
+MAX_CIRCLE_RADIUS = 0.8                 # Maximum cylinder radius (m)
+CIRCLE_FIT_ERROR_THRESHOLD = 0.3       # Max fitting error to accept (m) - increased tolerance
 
 # Landmark Management
 MAX_LANDMARKS = 20                      # Maximum number of landmarks
 MIN_LANDMARK_SEPARATION = 0.5           # Minimum distance between landmarks (m) - reduced for denser cylinder grid
-LANDMARK_CONFIRM_FRAMES = 2             # Frames to confirm new landmark (reduced from 3)
-LANDMARK_CONFIRM_DISTANCE = 0.5         # Distance threshold for confirmation
-MAX_LANDMARK_RANGE = 3.2                # Max range for landmark detection (match laser range)
+LANDMARK_CONFIRM_FRAMES = 1             # Frames to confirm new landmark (immediate confirmation)
+LANDMARK_CONFIRM_DISTANCE = 0.6         # Distance threshold for confirmation
+MAX_LANDMARK_RANGE = 3.5                # Max range for landmark detection (match laser range)
 
 # Map Generation
 USE_EKF_POSE_FOR_MAP = True

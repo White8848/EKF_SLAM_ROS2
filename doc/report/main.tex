@@ -1,0 +1,913 @@
+\documentclass[11pt,a4paper]{article}
+
+% ============================================
+% PACKAGES
+% ============================================
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{geometry}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{cleveref}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{tikz}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+
+% ============================================
+% PAGE SETUP
+% ============================================
+\geometry{
+    left=25mm,
+    right=25mm,
+    top=25mm,
+    bottom=25mm
+}
+
+% ============================================
+% CODE LISTING STYLE
+% ============================================
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{magenta},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+% ============================================
+% HEADER/FOOTER
+% ============================================
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{EKF-SLAM ROS2 Analysis}
+\lhead{Technical Report}
+\rfoot{Page \thepage}
+
+% ============================================
+% CUSTOM COMMANDS
+% ============================================
+\newcommand{\state}{\bm{x}}
+\newcommand{\measurement}{\bm{z}}
+\newcommand{\control}{\bm{u}}
+\newcommand{\covariance}{\bm{P}}
+\newcommand{\kalman}{\bm{K}}
+\newcommand{\jacobian}{\bm{J}}
+\newcommand{\noise}{\bm{Q}}
+\newcommand{\measnoise}{\bm{R}}
+
+% ============================================
+% TITLE
+% ============================================
+\title{
+    \vspace{-1cm}
+    \textbf{EKF-SLAM ROS2 Project Report} \\[0.5em]
+    \textbf{Updated Implementation Analysis}
+}
+\author{
+    Jaisel Singh, Huan Gu and Qinghua He \\
+    Columbia University \\
+    Department of Mechanical Engineering
+}
+\date{\today}
+
+% ============================================
+% DOCUMENT
+% ============================================
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report provides a comprehensive analysis of the \texttt{EKF\_SLAM\_ROS2} repository, examining its structure, theoretical foundations, and implementation details. We present complete mathematical derivations for Extended Kalman Filter-based Simultaneous Localization and Mapping (EKF-SLAM), compare the repository's implementation against the theoretical framework, and identify areas for improvement. The analysis covers motion models, measurement models, state estimation, and the critical Jacobian computations that enable linearization of the nonlinear SLAM problem.
+
+The repository implements two variants of EKF-SLAM in Python for ROS2:
+\begin{enumerate}
+    \item \textbf{Feature-based SLAM} using Split-and-Merge line segment detection for corner extraction
+    \item \textbf{Clustering-based SLAM} using DBSCAN clustering for point landmark detection
+\end{enumerate}
+
+Both implementations include real-time state estimation, landmark management, data association, and occupancy grid mapping for visualization.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+% ============================================
+\section{Introduction}
+% ============================================
+
+Simultaneous Localization and Mapping (SLAM) is a fundamental problem in mobile robotics where a robot must construct a map of an unknown environment while simultaneously tracking its own location within that map. The Extended Kalman Filter (EKF) approach to SLAM remains one of the most well-understood and theoretically grounded solutions to this problem.
+
+\subsection{Project Overview}
+
+The \texttt{EKF\_SLAM\_ROS2} repository implements an EKF-SLAM system within the Robot Operating System 2 (ROS2) framework. The project aims to provide:
+
+\begin{itemize}[noitemsep]
+    \item Real-time state estimation for mobile robot localization
+    \item Landmark-based mapping using sensor observations
+    \item Integration with ROS2's navigation stack
+    \item Visualization tools for debugging and analysis
+    \item Two complementary landmark detection approaches
+\end{itemize}
+
+\subsection{Repository Structure}
+
+The repository follows standard ROS2 Python package conventions:
+
+\begin{lstlisting}[language=bash, caption={Repository Directory Structure}]
+EKF_SLAM_ROS2/
+├── src/
+│   ├── ekf_slam/
+│   │   ├── ekf_slam_node.py           # Feature-based EKF SLAM (Split-and-Merge)
+│   │   ├── ekf_slam_clustering_node.py # Clustering-based EKF SLAM (DBSCAN)
+│   │   └── __init__.py
+├── launch/                           # Launch files for different configurations
+├── rviz/                             # RViz visualization configurations
+├── worlds/                           # Gazebo world files
+├── config/                           # Navigation and parameter files
+├── doc/
+│   └── report/                       # Technical documentation
+└── README.md
+\end{lstlisting}
+
+% ============================================
+\section{Theoretical Background: EKF-SLAM}
+% ============================================
+
+\subsection{State Representation}
+
+In EKF-SLAM, the state vector $\state_t$ at time $t$ contains both the robot pose and all observed landmark positions:
+
+\begin{equation}
+    \state_t = \begin{bmatrix}
+        \state_t^{(r)} \\
+        \state_t^{(m)}
+    \end{bmatrix} = \begin{bmatrix}
+        x_t \\ y_t \\ \theta_t \\ m_{1,x} \\ m_{1,y} \\ \vdots \\ m_{n,x} \\ m_{n,y}
+    \end{bmatrix} \in \mathbb{R}^{3+2n}
+\end{equation}
+
+where:
+\begin{itemize}[noitemsep]
+    \item $(x_t, y_t, \theta_t)$ represents the robot pose (position and orientation)
+    \item $(m_{i,x}, m_{i,y})$ represents the position of the $i$-th landmark
+    \item $n$ is the total number of observed landmarks
+\end{itemize}
+
+The associated covariance matrix has the block structure:
+
+\begin{equation}
+    \covariance_t = \begin{bmatrix}
+        \covariance_{rr} & \covariance_{rm} \\
+        \covariance_{mr} & \covariance_{mm}
+    \end{bmatrix}
+\end{equation}
+
+where $\covariance_{rr} \in \mathbb{R}^{3\times 3}$ captures robot pose uncertainty, $\covariance_{mm} \in \mathbb{R}^{2n\times 2n}$ captures landmark position uncertainties, and $\covariance_{rm}$, $\covariance_{mr}$ capture the correlations between robot and landmark estimates.
+
+\subsection{The EKF-SLAM Algorithm}
+
+The EKF-SLAM algorithm consists of two main phases that execute recursively:
+
+\begin{algorithm}[H]
+\caption{EKF-SLAM Algorithm}
+\begin{algorithmic}[1]
+\Require Initial state $\bar{\state}_0$, initial covariance $\bar{\covariance}_0$
+\For{each time step $t = 1, 2, \ldots$}
+    \State \textbf{Prediction Step:}
+    \State \quad Predict state: $\bar{\state}_t = g(\state_{t-1}, \control_t)$
+    \State \quad Predict covariance: $\bar{\covariance}_t = \bm{G}_t \covariance_{t-1} \bm{G}_t^\top + \bm{R}_t$
+    \State \textbf{Update Step:} (for each observation $\measurement_t^i$)
+    \State \quad Compute Kalman gain: $\kalman_t = \bar{\covariance}_t \bm{H}_t^\top (\bm{H}_t \bar{\covariance}_t \bm{H}_t^\top + \noise_t)^{-1}$
+    \State \quad Update state: $\state_t = \bar{\state}_t + \kalman_t (\measurement_t^i - h(\bar{\state}_t))$
+    \State \quad Update covariance: $\covariance_t = (\bm{I} - \kalman_t \bm{H}_t) \bar{\covariance}_t$
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% ============================================
+\section{Motion Model Derivation}
+% ============================================
+
+\subsection{Velocity Motion Model}
+
+The repository implements a velocity-based motion model, which is common for differential-drive and car-like robots. Given control inputs $\control_t = (v_t, \omega_t)^\top$ representing linear and angular velocities:
+
+\begin{equation}
+    g(\state_{t-1}, \control_t) = \begin{bmatrix}
+        x_{t-1} + v_t \Delta t \cos(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        y_{t-1} + v_t \Delta t \sin(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        \theta_{t-1} + \omega_t \Delta t
+    \end{bmatrix}
+    \label{eq:motion_model}
+\end{equation}
+
+The midpoint integration $(\theta_{t-1} + \omega_t \Delta t / 2)$ provides better accuracy than simple Euler integration by approximating the average heading during the motion interval.
+
+\subsection{Motion Model Jacobian}
+
+For the EKF, we require the Jacobian of the motion model with respect to the state. Since landmarks are assumed stationary, the full Jacobian is:
+
+\begin{equation}
+    \bm{G}_t = \frac{\partial g}{\partial \state} = \begin{bmatrix}
+        \bm{G}_t^{(r)} & \bm{0}_{3 \times 2n} \\
+        \bm{0}_{2n \times 3} & \bm{I}_{2n}
+    \end{bmatrix}
+\end{equation}
+
+where the robot-specific Jacobian is:
+
+\begin{equation}
+    \bm{G}_t^{(r)} = \frac{\partial g}{\partial \state^{(r)}} = \begin{bmatrix}
+        1 & 0 & -v_t \Delta t \sin(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        0 & 1 & v_t \Delta t \cos(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        0 & 0 & 1
+    \end{bmatrix}
+    \label{eq:motion_jacobian}
+\end{equation}
+
+\subsection{Process Noise}
+
+The process noise covariance $\bm{R}_t$ models uncertainty in the motion model. A common formulation maps control-space noise to state-space:
+
+\begin{equation}
+    \bm{R}_t = \bm{V}_t \bm{M}_t \bm{V}_t^\top
+\end{equation}
+
+where $\bm{V}_t = \frac{\partial g}{\partial \control}$ is the Jacobian with respect to controls:
+
+\begin{equation}
+    \bm{V}_t = \begin{bmatrix}
+        \Delta t \cos(\theta_{t-1} + \omega_t \Delta t / 2) & -\frac{v_t \Delta t^2}{2} \sin(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        \Delta t \sin(\theta_{t-1} + \omega_t \Delta t / 2) & \frac{v_t \Delta t^2}{2} \cos(\theta_{t-1} + \omega_t \Delta t / 2) \\
+        0 & \Delta t
+    \end{bmatrix}
+\end{equation}
+
+and $\bm{M}_t$ is the control noise covariance:
+
+\begin{equation}
+    \bm{M}_t = \begin{bmatrix}
+        \alpha_1 v_t^2 + \alpha_2 \omega_t^2 & 0 \\
+        0 & \alpha_3 v_t^2 + \alpha_4 \omega_t^2
+    \end{bmatrix}
+\end{equation}
+
+The parameters $\alpha_1, \alpha_2, \alpha_3, \alpha_4$ characterize odometry noise and are typically determined through calibration.
+
+% ============================================
+\section{Measurement Model Derivation}
+% ============================================
+
+\subsection{Range-Bearing Observations}
+
+The measurement model describes how landmark observations relate to the state. For range-bearing sensors (e.g., lidar detecting landmarks):
+
+\begin{equation}
+    h(\state_t, j) = \begin{bmatrix}
+        r_j \\
+        \phi_j
+    \end{bmatrix} = \begin{bmatrix}
+        \sqrt{(m_{j,x} - x_t)^2 + (m_{j,y} - y_t)^2} \\
+        \text{atan2}(m_{j,y} - y_t, m_{j,x} - x_t) - \theta_t
+    \end{bmatrix}
+    \label{eq:measurement_model}
+\end{equation}
+
+where $r_j$ is the range to landmark $j$ and $\phi_j$ is the bearing angle relative to the robot's heading.
+
+\subsection{Measurement Jacobian}
+
+The measurement Jacobian $\bm{H}_t$ is crucial for the EKF update. For observation of landmark $j$:
+
+\begin{equation}
+    \bm{H}_t^j = \frac{\partial h}{\partial \state} = \begin{bmatrix}
+        \bm{H}_t^{(r,j)} & \bm{0} & \cdots & \bm{H}_t^{(m,j)} & \cdots & \bm{0}
+    \end{bmatrix}
+\end{equation}
+
+where the non-zero blocks are:
+
+\begin{equation}
+    \bm{H}_t^{(r,j)} = \frac{\partial h}{\partial \state^{(r)}} = \begin{bmatrix}
+        -\frac{\delta_x}{q} & -\frac{\delta_y}{q} & 0 \\
+        \frac{\delta_y}{q^2} & -\frac{\delta_x}{q^2} & -1
+    \end{bmatrix}
+    \label{eq:H_robot}
+\end{equation}
+
+\begin{equation}
+    \bm{H}_t^{(m,j)} = \frac{\partial h}{\partial m_j} = \begin{bmatrix}
+        \frac{\delta_x}{q} & \frac{\delta_y}{q} \\
+        -\frac{\delta_y}{q^2} & \frac{\delta_x}{q^2}
+    \end{bmatrix}
+    \label{eq:H_landmark}
+\end{equation}
+
+where we define:
+\begin{align}
+    \delta_x &= m_{j,x} - x_t \\
+    \delta_y &= m_{j,y} - y_t \\
+    q &= \sqrt{\delta_x^2 + \delta_y^2}
+\end{align}
+
+Note that $q = r_j$ is the predicted range to the landmark.
+
+\subsection{Measurement Noise}
+
+The measurement noise covariance $\noise_t$ models sensor uncertainty:
+
+\begin{equation}
+    \noise_t = \begin{bmatrix}
+        \sigma_r^2 & 0 \\
+        0 & \sigma_\phi^2
+    \end{bmatrix}
+\end{equation}
+
+where $\sigma_r$ and $\sigma_\phi$ are the standard deviations of range and bearing measurements, respectively.
+
+% ============================================
+\section{Landmark Initialization}
+% ============================================
+
+\subsection{State Augmentation}
+
+When a new landmark is observed for the first time, the state vector must be augmented. Given observation $\measurement = (r, \phi)^\top$:
+
+\begin{equation}
+    \begin{bmatrix}
+        m_{\text{new},x} \\
+        m_{\text{new},y}
+    \end{bmatrix} = \begin{bmatrix}
+        x_t + r \cos(\theta_t + \phi) \\
+        y_t + r \sin(\theta_t + \phi)
+    \end{bmatrix}
+    \label{eq:landmark_init}
+\end{equation}
+
+\subsection{Covariance Augmentation}
+
+The covariance matrix must also be augmented to include the new landmark's uncertainty. The initialization Jacobians are:
+
+\begin{equation}
+    \bm{J}_r = \frac{\partial m_{\text{new}}}{\partial \state^{(r)}} = \begin{bmatrix}
+        1 & 0 & -r \sin(\theta_t + \phi) \\
+        0 & 1 & r \cos(\theta_t + \phi)
+    \end{bmatrix}
+\end{equation}
+
+\begin{equation}
+    \bm{J}_z = \frac{\partial m_{\text{new}}}{\partial \measurement} = \begin{bmatrix}
+        \cos(\theta_t + \phi) & -r \sin(\theta_t + \phi) \\
+        \sin(\theta_t + \phi) & r \cos(\theta_t + \phi)
+    \end{bmatrix}
+\end{equation}
+
+The augmented covariance becomes:
+
+\begin{equation}
+    \covariance_{\text{aug}} = \begin{bmatrix}
+        \covariance_t & \covariance_t \bm{J}_r^\top \\
+        \bm{J}_r \covariance_t & \bm{J}_r \covariance_{rr} \bm{J}_r^\top + \bm{J}_z \noise_t \bm{J}_z^\top
+    \end{bmatrix}
+\end{equation}
+
+% ============================================
+\section{Implementation Analysis}
+% ============================================
+
+\subsection{Current Implementation Status}
+
+Based on analysis of the Python implementation, the repository includes two complete EKF-SLAM variants:
+
+\begin{table}[H]
+\centering
+\caption{Implementation Feature Matrix}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Feature} & \textbf{Feature-based} & \textbf{Clustering-based} & \textbf{Complete} \\
+\midrule
+Velocity motion model & \checkmark & \checkmark & Yes \\
+Motion Jacobian $\bm{G}_t$ & \checkmark & \checkmark & Yes \\
+Range-bearing measurement model & \checkmark & \checkmark & Yes \\
+Measurement Jacobian $\bm{H}_t$ & \checkmark & \checkmark & Yes \\
+State augmentation & \checkmark & \checkmark & Yes \\
+Covariance augmentation & \checkmark & \checkmark & Yes \\
+Data association (Mahalanobis) & \checkmark & \checkmark & Yes \\
+Corner detection (Split-and-Merge) & \checkmark & $\times$ & Yes \\
+Point clustering (DBSCAN) & $\times$ & \checkmark & Yes \\
+Occupancy grid mapping & \checkmark & \checkmark & Yes \\
+Loop closure & $\times$ & $\times$ & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Code Analysis: Motion Model}
+
+Both implementations use the standard velocity-based motion model with proper Jacobian computation:
+
+\begin{lstlisting}[language=Python, caption={Motion Model Implementation}]
+def predict(self, dx_local, dy_local, dtheta):
+    """
+    EKF Prediction Step.
+    Motion model: robot moves by (dx, dy) in local frame, then rotates by dθ.
+    """
+    theta = self.state[2]
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    
+    # Transform local motion to global frame
+    dx_global = dx_local * cos_t - dy_local * sin_t
+    dy_global = dx_local * sin_t + dy_local * cos_t
+    
+    # Update robot pose
+    self.state[0] += dx_global
+    self.state[1] += dy_global
+    self.state[2] = normalize_angle(self.state[2] + dtheta)
+    
+    # Jacobian of motion model w.r.t. state
+    n = len(self.state)
+    G = np.eye(n)
+    G[0, 2] = -dx_local * sin_t - dy_local * cos_t
+    G[1, 2] = dx_local * cos_t - dy_local * sin_t
+    
+    # Propagate covariance: P = G P Gᵀ + Q_augmented
+    self.covariance = G @ self.covariance @ G.T
+    self.covariance[:3, :3] += self.Q  # Add process noise to robot pose only
+\end{lstlisting}
+
+\subsection{Code Analysis: Feature Extraction}
+
+\subsubsection{Split-and-Merge Line Segmentation (Feature-based)}
+
+The feature-based implementation uses recursive Split-and-Merge algorithm for line segment detection:
+
+\begin{lstlisting}[language=Python, caption={Split-and-Merge Line Detection}]
+def _split_and_merge(self, points, depth=0):
+    """Recursive Split-and-Merge for line segment detection."""
+    if len(points) < self.min_line_points or depth > 50:
+        return []
+    
+    # Fit line to all points
+    line_params, p1, p2 = self._fit_line(points)
+    if line_params is None:
+        return []
+    
+    # Find point with maximum distance from line
+    max_dist = 0
+    max_dist_idx = -1
+    for i, pt in enumerate(points):
+        d = self._point_to_line_distance(pt, line_params)
+        if d > max_dist:
+            max_dist = d
+            max_dist_idx = i
+    
+    # Split if distance exceeds threshold
+    if max_dist > self.split_threshold and max_dist_idx > 0:
+        left_points = points[:max_dist_idx + 1]
+        right_points = points[max_dist_idx:]
+        
+        left_segments = self._split_and_merge(left_points, depth + 1)
+        right_segments = self._split_and_merge(right_points, depth + 1)
+        
+        return left_segments + right_segments
+    else:
+        # Points fit the line well
+        length = np.sqrt((p2[0] - p1[0])**2 + (p2[1] - p1[1])**2)
+        if length >= self.min_line_length:
+            return [(p1, p2, points)]
+        return []
+\end{lstlisting}
+
+\subsubsection{Corner Detection from Line Intersections}
+
+Corners are detected by finding intersections of adjacent line segments with appropriate angles:
+
+\begin{lstlisting}[language=Python, caption={Corner Detection from Line Intersections}]
+def detect_corners(self, line_segments):
+    """Detect corners from line segment intersections."""
+    corners = []
+    for i in range(len(line_segments)):
+        for j in range(i + 1, len(line_segments)):
+            seg1, seg2 = line_segments[i], line_segments[j]
+            
+            if not self._segments_are_adjacent(seg1, seg2):
+                continue
+            
+            angle = self._angle_between_lines(seg1, seg2)
+            if 80 <= angle <= 100:  # 90° corner range
+                intersection = self._line_intersection(seg1, seg2)
+                if intersection:
+                    ix, iy = intersection
+                    dist = np.sqrt(ix**2 + iy**2)
+                    if self.min_range < dist < self.max_range:
+                        bearing = np.arctan2(iy, ix)
+                        corners.append((dist, bearing))
+    return corners
+\end{lstlisting}
+
+\subsubsection{DBSCAN Clustering (Clustering-based)}
+
+The clustering-based implementation uses a DBSCAN-like algorithm for point landmark detection:
+
+\begin{lstlisting}[language=Python, caption={DBSCAN Clustering for Point Landmarks}]
+def _dbscan_cluster(self, points):
+    """DBSCAN clustering for point landmark detection."""
+    clusters = []
+    visited = [False] * len(points)
+    
+    for i in range(len(points)):
+        if visited[i]:
+            continue
+        
+        visited[i] = True
+        neighbors = self._find_neighbors(points, i, CLUSTER_EPS)
+        
+        if len(neighbors) < CLUSTER_MIN_POINTS:
+            continue  # Noise point
+        
+        cluster = [points[i]]
+        queue = neighbors[:]
+        
+        while queue:
+            j = queue.pop(0)
+            if visited[j]:
+                continue
+            
+            visited[j] = True
+            cluster.append(points[j])
+            
+            new_neighbors = self._find_neighbors(points, j, CLUSTER_EPS)
+            if len(new_neighbors) >= CLUSTER_MIN_POINTS:
+                queue.extend(new_neighbors)
+        
+        # Validate cluster size and shape
+        if self._is_valid_cluster(cluster):
+            clusters.append(cluster)
+    
+    return clusters
+\end{lstlisting}
+
+\subsection{Code Analysis: Data Association}
+
+Both implementations use Mahalanobis distance for robust data association:
+
+\begin{lstlisting}[language=Python, caption={Mahalanobis Distance Data Association}]
+def associate_landmark(self, z_range, z_bearing):
+    """Associate observation to known landmark using Mahalanobis distance."""
+    if self.num_landmarks == 0:
+        return -1
+    
+    robot_x, robot_y, robot_theta = self.state[0], self.state[1], self.state[2]
+    
+    best_idx = -1
+    best_dist = self.association_threshold
+    
+    for i in range(self.num_landmarks):
+        lx = self.state[3 + 2 * i]
+        ly = self.state[3 + 2 * i + 1]
+        
+        # Predicted observation
+        dx = lx - robot_x
+        dy = ly - robot_y
+        pred_range = np.sqrt(dx**2 + dy**2)
+        pred_bearing = normalize_angle(np.arctan2(dy, dx) - robot_theta)
+        
+        # Innovation
+        innovation = np.array([
+            z_range - pred_range,
+            normalize_angle(z_bearing - pred_bearing)
+        ])
+        
+        # Jacobian H for this landmark
+        H = self._compute_jacobian_H(i, dx, dy, pred_range)
+        
+        # Innovation covariance: S = H P Hᵀ + R
+        S = H @ self.covariance @ H.T + self.R
+        
+        # Mahalanobis distance: d² = yᵀ S⁻¹ y
+        try:
+            S_inv = np.linalg.inv(S)
+            mahal_dist = innovation.T @ S_inv @ innovation
+        except np.linalg.LinAlgError:
+            continue
+        
+        if mahal_dist < best_dist:
+            best_dist = mahal_dist
+            best_idx = i
+    
+    return best_idx
+\end{lstlisting}
+
+\subsection{Code Analysis: EKF Update}
+
+The EKF update implements the standard Kalman filter equations with numerical safeguards:
+
+\begin{lstlisting}[language=Python, caption={EKF Update Implementation}]
+def ekf_update(self, landmark_idx, z_range, z_bearing):
+    """EKF Update Step using observation of a known landmark."""
+    robot_x, robot_y, robot_theta = self.state[0], self.state[1], self.state[2]
+    
+    # Get landmark position
+    lx = self.state[3 + 2 * landmark_idx]
+    ly = self.state[3 + 2 * landmark_idx + 1]
+    
+    # Predicted observation
+    dx = lx - robot_x
+    dy = ly - robot_y
+    pred_range = np.sqrt(dx**2 + dy**2)
+    pred_bearing = normalize_angle(np.arctan2(dy, dx) - robot_theta)
+    
+    # Innovation
+    innovation = np.array([
+        z_range - pred_range,
+        normalize_angle(z_bearing - pred_bearing)
+    ])
+    
+    # Jacobian H
+    H = self._compute_jacobian_H(landmark_idx, dx, dy, pred_range)
+    
+    # Innovation covariance: S = H P Hᵀ + R
+    S = H @ self.covariance @ H.T + self.R
+    
+    # Kalman Gain: K = P Hᵀ S⁻¹
+    try:
+        K = self.covariance @ H.T @ np.linalg.inv(S)
+    except np.linalg.LinAlgError:
+        self.get_logger().warn('Singular matrix in EKF update, skipping')
+        return
+    
+    # State update with clamping to prevent large jumps
+    delta = K @ innovation
+    delta[0] = np.clip(delta[0], -0.01, 0.01)  # MAX_POS_DELTA
+    delta[1] = np.clip(delta[1], -0.01, 0.01)
+    delta[2] = np.clip(delta[2], -0.01, 0.01)  # MAX_THETA_DELTA
+    
+    self.state = self.state + delta
+    self.state[2] = normalize_angle(self.state[2])
+    
+    # Covariance update: P = (I - K H) P
+    n = len(self.state)
+    I = np.eye(n)
+    self.covariance = (I - K @ H) @ self.covariance
+\end{lstlisting}
+
+\subsection{Code Analysis: State Augmentation}
+
+Both implementations properly augment the state vector and covariance matrix when adding new landmarks:
+
+\begin{lstlisting}[language=Python, caption={State Augmentation Implementation}]
+def add_landmark(self, z_range, z_bearing):
+    """Add a new landmark to the state vector."""
+    robot_x, robot_y, robot_theta = self.state[0], self.state[1], self.state[2]
+    
+    # Compute landmark global position
+    global_angle = robot_theta + z_bearing
+    lx = robot_x + z_range * np.cos(global_angle)
+    ly = robot_y + z_range * np.sin(global_angle)
+    
+    # Augment state vector
+    self.state = np.append(self.state, [lx, ly])
+    
+    # Augment covariance matrix
+    n_old = len(self.covariance)
+    n_new = n_old + 2
+    
+    # Jacobian of landmark initialization w.r.t. robot pose
+    cos_a = np.cos(global_angle)
+    sin_a = np.sin(global_angle)
+    
+    Gp = np.array([
+        [1, 0, -z_range * sin_a],
+        [0, 1, z_range * cos_a]
+    ])
+    
+    # Jacobian w.r.t. measurement
+    Gz = np.array([
+        [cos_a, -z_range * sin_a],
+        [sin_a, z_range * cos_a]
+    ])
+    
+    # New covariance matrix
+    P_new = np.zeros((n_new, n_new))
+    P_new[:n_old, :n_old] = self.covariance
+    
+    # Covariance of new landmark
+    P_robot = self.covariance[:3, :3]
+    P_lm = Gp @ P_robot @ Gp.T + Gz @ self.R @ Gz.T
+    
+    P_new[n_old:, n_old:] = P_lm
+    
+    # Cross-covariance
+    P_new[n_old:, :n_old] = Gp @ self.covariance[:3, :]
+    P_new[:n_old, n_old:] = P_new[n_old:, :n_old].T
+    
+    self.covariance = P_new
+    self.num_landmarks += 1
+\end{lstlisting}
+
+% ============================================
+\section{Identified Issues and Recommendations}
+% ============================================
+
+\subsection{Implementation Strengths}
+
+The current Python implementation demonstrates several strengths:
+
+\begin{enumerate}
+    \item \textbf{Complete EKF-SLAM Implementation:} Both variants include all core EKF-SLAM components with proper Jacobian computations
+    \item \textbf{Robust Data Association:} Mahalanobis distance-based association with appropriate gating thresholds
+    \item \textbf{Numerical Stability:} State update clamping prevents filter divergence from large corrections
+    \item \textbf{Real-time Performance:} Efficient algorithms suitable for real-time operation
+    \item \textbf{Dual Landmark Detection Approaches:} Complementary methods for different environment types
+\end{enumerate}
+
+\subsection{Areas for Improvement}
+
+\subsubsection{Process Noise Model Enhancement}
+
+Current implementation uses diagonal process noise. A more sophisticated model incorporating velocity-dependent noise would improve accuracy:
+
+\begin{equation}
+    \bm{R}_t = \bm{V}_t \bm{M}_t \bm{V}_t^\top
+\end{equation}
+
+where $\bm{M}_t$ includes velocity-dependent terms for better motion uncertainty modeling.
+
+\subsubsection{Loop Closure Detection}
+
+The implementation lacks loop closure capabilities. Adding techniques such as:
+\begin{itemize}
+    \item Landmark matching across revisited areas
+    \item Pose graph optimization for consistency
+    \item Covariance inflation for landmark re-observations
+\end{itemize}
+
+\subsubsection{Advanced Data Association}
+
+Current single-best association strategy is conservative but may miss opportunities. Consider:
+\begin{itemize}
+    \item Joint Compatibility Branch and Bound (JCBB)
+    \item Multi-hypothesis tracking
+    \item Probabilistic data association
+\end{itemize}
+
+\subsection{Minor Enhancements}
+
+\begin{enumerate}
+    \item \textbf{Adaptive Parameters:} Dynamic adjustment of noise parameters based on motion speed
+    \item \textbf{Landmark Quality Metrics:} Confidence scores for landmark reliability
+    \item \textbf{Outlier Rejection:} More sophisticated innovation gating beyond simple thresholds
+    \item \textbf{Sparsity Exploitation:} For large maps, consider sparse matrix representations
+\end{enumerate}
+
+% ============================================
+\section{Extended Derivations}
+% ============================================
+
+\subsection{Joseph Form Covariance Update}
+
+For improved numerical stability, the Joseph form of the covariance update is preferred:
+
+\begin{equation}
+    \covariance_t = (\bm{I} - \kalman_t \bm{H}_t) \bar{\covariance}_t (\bm{I} - \kalman_t \bm{H}_t)^\top + \kalman_t \noise_t \kalman_t^\top
+\end{equation}
+
+This formulation guarantees positive semi-definiteness of $\covariance_t$ even with numerical errors.
+
+\subsection{Mahalanobis Distance for Data Association}
+
+The Mahalanobis distance provides a normalized measure of innovation:
+
+\begin{equation}
+    D_M^2 = (\measurement_t - h(\bar{\state}_t))^\top \bm{S}_t^{-1} (\measurement_t - h(\bar{\state}_t))
+\end{equation}
+
+where $\bm{S}_t = \bm{H}_t \bar{\covariance}_t \bm{H}_t^\top + \noise_t$ is the innovation covariance.
+
+Under correct association, $D_M^2$ follows a chi-squared distribution with degrees of freedom equal to the measurement dimension. A common gating threshold is $\chi^2_{0.95}(2) \approx 5.99$ for 2D measurements.
+
+\subsection{Observability Analysis}
+
+For EKF-SLAM, the system is not fully observable---only relative positions between the robot and landmarks can be estimated. This manifests as:
+\begin{itemize}
+    \item Three unobservable modes corresponding to global translation $(x, y)$ and rotation $\theta$
+    \item The covariance matrix will have (at least) three eigenvalues that grow without bound
+    \item Relative landmark positions remain well-estimated
+\end{itemize}
+
+% ============================================
+\section{Conclusion}
+% ============================================
+
+This report has provided a comprehensive analysis of the \texttt{EKF\_SLAM\_ROS2} repository, focusing on its Python implementation with two complementary SLAM approaches. The analysis covers:
+
+\begin{enumerate}
+    \item Complete mathematical derivations for EKF-SLAM
+    \item Detailed examination of motion and measurement models
+    \item Implementation analysis of both feature-based and clustering-based variants
+    \item Code-level examination of core algorithms including data association, EKF updates, and state augmentation
+    \item Identification of implementation strengths and areas for enhancement
+\end{enumerate}
+
+The repository demonstrates a mature and well-implemented EKF-SLAM system suitable for real-world deployment. The dual approach (feature-based with Split-and-Merge corner detection and clustering-based with DBSCAN point detection) provides flexibility for different environments. The implementation includes proper numerical safeguards, robust data association, and complete covariance management.
+
+Future enhancements could focus on loop closure detection, advanced data association techniques, and adaptive parameter tuning to further improve performance in complex environments.
+
+% ============================================
+\section*{Appendix A: Implementation Details}
+% ============================================
+
+\subsection*{Key Algorithms Summary}
+
+\begin{table}[H]
+\centering
+\caption{EKF-SLAM Implementation Components}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Component} & \textbf{Implementation Details} \\
+\midrule
+Motion Model & Velocity-based with local-to-global transformation \\
+Motion Jacobian & Analytical derivatives with respect to robot pose \\
+Measurement Model & Range-bearing observations \\
+Measurement Jacobian & Analytical derivatives for range and bearing \\
+Data Association & Mahalanobis distance with gating \\
+State Augmentation & Full covariance augmentation with cross-correlations \\
+Feature Extraction & Split-and-Merge (corners) and DBSCAN (points) \\
+Occupancy Mapping & Real-time grid updates with ray tracing \\
+Numerical Stability & State clamping, matrix inversion checks \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection*{Parameter Recommendations}
+
+\begin{table}[H]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Parameter} & \textbf{Feature-based} & \textbf{Clustering-based} \\
+\midrule
+Process Noise Q & [0.01, 0.01, 0.01] & [0.01, 0.01, 0.01] \\
+Measurement Noise R & [0.1, 0.1] & [0.3, 0.3] \\
+Association Threshold & 1.0 & 6.0 \\
+Max Landmarks & 20 & 30 \\
+Update Limits & ±0.01 m, ±0.01 rad & ±0.05 m, ±0.05 rad \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ============================================
+% BIBLIOGRAPHY (Optional)
+% ============================================
+\begin{thebibliography}{9}
+
+\bibitem{thrun2005}
+S. Thrun, W. Burgard, and D. Fox,
+\textit{Probabilistic Robotics},
+MIT Press, 2005.
+
+\bibitem{durrant2006}
+H. Durrant-Whyte and T. Bailey,
+``Simultaneous localization and mapping: Part I,''
+\textit{IEEE Robotics \& Automation Magazine},
+vol. 13, no. 2, pp. 99--110, 2006.
+
+\bibitem{bailey2006}
+T. Bailey and H. Durrant-Whyte,
+``Simultaneous localization and mapping (SLAM): Part II,''
+\textit{IEEE Robotics \& Automation Magazine},
+vol. 13, no. 3, pp. 108--117, 2006.
+
+\end{thebibliography}
+
+\end{document}

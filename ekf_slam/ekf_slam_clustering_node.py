@@ -34,7 +34,8 @@ ASSOCIATION_THRESHOLD = 5.99            # Mahalanobis distance threshold (95% co
 
 # EKF Update Limits
 MAX_POS_DELTA = 0.02                    # Max position change per update (m) - conservative
-MAX_THETA_DELTA = 0.02                  # Max angle change per update (rad) - conservative
+MAX_THETA_DELTA = 0.005                 # Max angle change per update (rad) - very conservative (~0.3°)
+MAX_LANDMARK_DELTA = 0.05               # Max landmark position change per update (m)
 MAX_INNOVATION_RANGE = 0.5              # Max acceptable range innovation (m)
 MAX_INNOVATION_BEARING = 0.3            # Max acceptable bearing innovation (rad)
 
@@ -521,10 +522,14 @@ class EKFSLAMClusteringNode(Node):
         
         delta = K @ innovation
         
-        # Clamp updates
+        # Clamp robot pose updates (prevent large jumps from bad matches)
         delta[0] = np.clip(delta[0], -MAX_POS_DELTA, MAX_POS_DELTA)
         delta[1] = np.clip(delta[1], -MAX_POS_DELTA, MAX_POS_DELTA)
-        delta[2] = np.clip(delta[2], -MAX_THETA_DELTA, MAX_THETA_DELTA)
+        delta[2] = np.clip(delta[2], -MAX_THETA_DELTA, MAX_THETA_DELTA)  # Very conservative for theta
+        
+        # Clamp landmark updates (prevent map corruption)
+        for i in range(3, len(delta)):
+            delta[i] = np.clip(delta[i], -MAX_LANDMARK_DELTA, MAX_LANDMARK_DELTA)
         
         self.state = self.state + delta
         self.state[2] = normalize_angle(self.state[2])

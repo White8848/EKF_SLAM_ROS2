@@ -97,7 +97,7 @@
     \textbf{EKF-SLAM ROS2 Project Report} \\[0.5em]
 }
 \author{
-    Jaisel Singh, Huan Gu and Qinghua He \\
+    Jaisel Singh, Huan Gu, Qinghua He \\
     \\
     Columbia University \\
     Department of Mechanical Engineering
@@ -221,21 +221,23 @@ where $\covariance_{rr} \in \mathbb{R}^{3\times 3}$ captures robot pose uncertai
 
 The EKF-SLAM algorithm consists of two main phases that execute recursively:
 
-\begin{algorithm}[H]
-\caption{EKF-SLAM Algorithm}
-\begin{algorithmic}[1]
-\Require Initial state $\bar{\state}_0$, initial covariance $\bar{\covariance}_0$
-\For{each time step $t = 1, 2, \ldots$}
-    \State \textbf{Prediction Step:}
-    \State \quad Predict state: $\bar{\state}_t = g(\state_{t-1}, \control_t)$
-    \State \quad Predict covariance: $\bar{\covariance}_t = \bm{G}_t \covariance_{t-1} \bm{G}_t^\top + \bm{R}_t$
-    \State \textbf{Update Step:} (for each observation $\measurement_t^i$)
-    \State \quad Compute Kalman gain: $\kalman_t = \bar{\covariance}_t \bm{H}_t^\top (\bm{H}_t \bar{\covariance}_t \bm{H}_t^\top + \noise_t)^{-1}$
-    \State \quad Update state: $\state_t = \bar{\state}_t + \kalman_t (\measurement_t^i - h(\bar{\state}_t))$
-    \State \quad Update covariance: $\covariance_t = (\bm{I} - \kalman_t \bm{H}_t) \bar{\covariance}_t$
-\EndFor
-\end{algorithmic}
-\end{algorithm}
+\begin{enumerate}
+    \item \textbf{Initialization:} Set initial state $\bar{\state}_0$ and initial covariance $\bar{\covariance}_0$
+    \item \textbf{For each time step $t = 1, 2, \ldots$:}
+    \begin{enumerate}
+        \item \textbf{Prediction Step:}
+        \begin{itemize}
+            \item Predict state: $\bar{\state}_t = g(\state_{t-1}, \control_t)$
+            \item Predict covariance: $\bar{\covariance}_t = \bm{G}_t \covariance_{t-1} \bm{G}_t^\top + \bm{R}_t$
+        \end{itemize}
+        \item \textbf{Update Step (for each observation $\measurement_t^i$):}
+        \begin{itemize}
+            \item Compute Kalman gain: $\kalman_t = \bar{\covariance}_t \bm{H}_t^\top (\bm{H}_t \bar{\covariance}_t \bm{H}_t^\top + \noise_t)^{-1}$
+            \item Update state: $\state_t = \bar{\state}_t + \kalman_t (\measurement_t^i - h(\bar{\state}_t))$
+            \item Update covariance: $\covariance_t = (\bm{I} - \kalman_t \bm{H}_t) \bar{\covariance}_t$
+        \end{itemize}
+    \end{enumerate}
+\end{enumerate}
 
 The algorithm operates in a predict-update cycle. The prediction step propagates the state forward using odometry measurements, while the update step corrects the state using landmark observations. In our implementation, we use a single-best association strategy where only the most reliable landmark observation is used for each update cycle to maintain numerical stability.
 
@@ -485,7 +487,7 @@ def predict(self, dx_local, dy_local, dtheta):
     """
     EKF Prediction Step.
     
-    Motion model: robot moves by (dx, dy) in its local frame, then rotates by dθ.
+    Motion model: robot moves by (dx, dy) in its local frame, then rotates by dtheta.
     Updates state mean and covariance.
     """
     theta = self.state[2]
@@ -625,7 +627,7 @@ def detect_corners(self, line_segments):
                 continue
             
             angle = self._angle_between_lines(seg1, seg2)
-            if 80 <= angle <= 100:  # 90° corner range
+            if 80 <= angle <= 100:  # 90 degree corner range
                 intersection = self._line_intersection(seg1, seg2)
                 if intersection:
                     ix, iy = intersection
@@ -733,7 +735,7 @@ def associate_landmark(self, z_range, z_bearing):
         # Innovation covariance: S = H P H^T + R
         S = H @ self.covariance @ H.T + self.R
         
-        # Mahalanobis distance: d² = y^T S^{-1} y
+        # Mahalanobis distance: mahal_dist = innovation^T S^{-1} innovation
         try:
             S_inv = np.linalg.inv(S)
             mahal_dist = innovation.T @ S_inv @ innovation
@@ -748,39 +750,6 @@ def associate_landmark(self, z_range, z_bearing):
 \end{lstlisting}
 
 The Mahalanobis distance provides statistically robust data association by accounting for both measurement noise and landmark position uncertainty. The method returns the index of the best matching landmark or -1 for new landmark detection.
-        ly = self.state[3 + 2 * i + 1]
-        
-        # Predicted observation
-        dx = lx - robot_x
-        dy = ly - robot_y
-        pred_range = np.sqrt(dx**2 + dy**2)
-        pred_bearing = normalize_angle(np.arctan2(dy, dx) - robot_theta)
-        
-        # Innovation
-        innovation = np.array([
-            z_range - pred_range,
-            normalize_angle(z_bearing - pred_bearing)
-        ])
-        
-        # Jacobian H for this landmark
-        H = self._compute_jacobian_H(i, dx, dy, pred_range)
-        
-        # Innovation covariance: S = H P H^T + R
-        S = H @ self.covariance @ H.T + self.R
-        
-        # Mahalanobis distance: d² = y^T S^{-1} y
-        try:
-            S_inv = np.linalg.inv(S)
-            mahal_dist = innovation.T @ S_inv @ innovation
-        except np.linalg.LinAlgError:
-            continue
-        
-        if mahal_dist < best_dist:
-            best_dist = mahal_dist
-            best_idx = i
-    
-    return best_idx
-\end{lstlisting}
 
 \subsection{Code Analysis: EKF Update}
 
@@ -877,11 +846,11 @@ def add_landmark(self, z_range, z_bearing):
     n_new = n_old + 2
     
     # Jacobian of landmark initialization w.r.t. robot pose
-    # lx = rx + r*cos(θ + β), ly = ry + r*sin(θ + β)
+    # lx = rx + r*cos(theta + beta), ly = ry + r*sin(theta + beta)
     cos_a = np.cos(global_angle)
     sin_a = np.sin(global_angle)
     
-    # Gp: Jacobian w.r.t. robot pose [x, y, θ]
+    # Gp: Jacobian w.r.t. robot pose [x, y, theta]
     Gp = np.array([
         [1, 0, -z_range * sin_a],
         [0, 1, z_range * cos_a]
@@ -1174,9 +1143,9 @@ Occupancy Mapping & $O(r)$ & $O(g)$ \\
 \midrule
 Process Noise Q & [0.01, 0.01, 0.01] & [0.01, 0.01, 0.01] \\
 Measurement Noise R & [0.1, 0.1] & [0.3, 0.3] \\
-Association Threshold & 1.0 (χ² ≈ 1.0) & 6.0 (χ² ≈ 6.0) \\
+Association Threshold & 1.0 ($\chi^2 \approx 1.0$) & 6.0 ($\chi^2 \approx 6.0$) \\
 Max Landmarks & 20 & 30 \\
-State Update Limits & ±0.01 m, ±0.01 rad & ±0.05 m, ±0.05 rad \\
+State Update Limits & $\pm$0.01 m, $\pm$0.01 rad & $\pm$0.05 m, $\pm$0.05 rad \\
 Feature Thresholds & Split: 0.05m, Min: 10pts & Eps: 0.3m, MinPts: 5 \\
 \midrule
 \multicolumn{3}{l}{\footnotesize Higher thresholds for clustering-based account for increased landmark uncertainty} \\

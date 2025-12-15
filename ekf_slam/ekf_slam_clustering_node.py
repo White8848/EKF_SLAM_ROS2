@@ -50,11 +50,11 @@ MAX_CIRCLE_RADIUS = 0.6                 # Maximum cylinder radius (m)
 CIRCLE_FIT_ERROR_THRESHOLD = 0.15       # Max fitting error to accept (m)
 
 # Landmark Management
-MAX_LANDMARKS = 20                    # Maximum number of landmarks
-MIN_LANDMARK_SEPARATION = 0.8           # Minimum distance between landmarks (m)
+MAX_LANDMARKS = 20                      # Maximum number of landmarks
+MIN_LANDMARK_SEPARATION = 0.5           # Minimum distance between landmarks (m) - reduced for denser cylinder grid
 LANDMARK_CONFIRM_FRAMES = 2             # Frames to confirm new landmark (reduced from 3)
 LANDMARK_CONFIRM_DISTANCE = 0.5         # Distance threshold for confirmation
-MAX_LANDMARK_RANGE = 3.0                # Max range for landmark detection (< laser range)
+MAX_LANDMARK_RANGE = 3.2                # Max range for landmark detection (match laser range)
 
 # Map Generation
 USE_EKF_POSE_FOR_MAP = True

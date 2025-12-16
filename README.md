@@ -2,6 +2,8 @@
 
 This package implements Extended Kalman Filter (EKF) based SLAM for TurtleBot3 with two complementary approaches: feature-based SLAM using corner detection and clustering-based SLAM using point clustering. The system supports both structured indoor environments (bookstore) and unstructured outdoor environments (cylinder world). Includes comprehensive technical documentation, mathematical derivations, and implementation analysis.
 
+Core Contributors: Jaisel Singh, Qinghua He, Huan Gu
+
 ## Package Structure
 
 ```
